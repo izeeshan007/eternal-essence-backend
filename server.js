@@ -1,4 +1,5 @@
-// server.js
+// server.js – main entry (ESM)
+
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -8,55 +9,54 @@ import orderRoutes from './routes/orderRoutes.js';
 
 dotenv.config();
 
-const app = express();
+// ===== ENV =====
 const PORT = process.env.PORT || 5000;
+const FRONTEND_URL = process.env.FRONTEND_URL || '*';
 
-// CORS: allow all (simple + safe for now)
-app.use(cors());
+if (!process.env.MONGODB_URI) {
+  console.error('❌ MONGODB_URI is not set in .env');
+}
+if (!process.env.JWT_SECRET) {
+  console.warn('⚠️ JWT_SECRET is not set in .env — using a weak fallback (dev-only).');
+}
+if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+  console.warn('⚠️ EMAIL_USER or EMAIL_PASS not set — OTP emails will fail.');
+}
 
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true }));
+// ===== APP SETUP =====
+const app = express();
+
+app.use(
+  cors({
+    origin: FRONTEND_URL,
+    credentials: true
+  })
+);
+
+app.use(express.json());
 
 // Health check
 app.get('/', (req, res) => {
   res.json({
     success: true,
     message: 'Eternal Essence backend running.',
-    timestamp: new Date().toISOString()
+    frontend: FRONTEND_URL
   });
 });
 
-// Routes
+// API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/orders', orderRoutes);
 
-// 404
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    error: 'Not found',
-    path: req.originalUrl
-  });
-});
-
-// Global error (optional)
-app.use((err, req, res, next) => {
-  console.error('🔥 Global error:', err);
-  res.status(500).json({
-    success: false,
-    error: 'Internal server error',
-    details: err.message || 'Unknown error'
-  });
-});
-
-// Start
+// ===== START SERVER AFTER DB CONNECT =====
 connectDB()
   .then(() => {
     app.listen(PORT, () => {
+      console.log('✅ MongoDB connected');
       console.log(`🚀 Server running on port ${PORT}`);
     });
   })
   .catch((err) => {
-    console.error('❌ Failed to connect DB, shutting down:', err);
+    console.error('❌ Failed to connect to MongoDB:', err.message);
     process.exit(1);
   });

@@ -1,12 +1,13 @@
 // models/Order.js
 import mongoose from 'mongoose';
 
-const orderItemSchema = new mongoose.Schema(
+const itemSchema = new mongoose.Schema(
   {
     productId: Number,
     name: String,
-    size: String,
-    price: Number,
+    selectedSize: String,
+    finalPrice: Number,
+    quantity: { type: Number, default: 1 },
     image: String
   },
   { _id: false }
@@ -15,27 +16,29 @@ const orderItemSchema = new mongoose.Schema(
 const orderSchema = new mongoose.Schema(
   {
     orderId: { type: String, required: true, unique: true },
-    email: { type: String, required: true, lowercase: true },
-    customerName: String,
+    buyerEmail: { type: String, required: true, lowercase: true, trim: true },
+    name: String,
     phone: String,
-    address: String,
 
-    items: [orderItemSchema],
+    shippingAddress: String,
+
+    items: [itemSchema],
+
     subtotal: Number,
     discount: Number,
     total: Number,
-    couponCode: String,
 
-    paymentMethod: { type: String, enum: ['Cash on Delivery', 'Razorpay Online Payment'], required: true },
-    status: { type: String, default: 'Pending' },
+    paymentMethod: String,
+    status: String,
 
-    razorpayOrderId: String,
-    razorpayPaymentId: String,
-    razorpaySignature: String
+    razorpay_order_id: String,
+    razorpay_payment_id: String,
+    razorpay_signature: String,
+
+    metadata: mongoose.Schema.Types.Mixed
   },
   { timestamps: true }
 );
 
-orderSchema.index({ email: 1, createdAt: -1 });
-
-export const Order = mongoose.model('Order', orderSchema);
+const Order = mongoose.model('Order', orderSchema);
+export default Order;
