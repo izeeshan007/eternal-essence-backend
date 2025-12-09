@@ -1,19 +1,17 @@
 // models/User.js
 import mongoose from 'mongoose';
 
-const userSchema = new mongoose.Schema(
-  {
-    name: { type: String, default: '' },
-    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    phone: { type: String, default: '' },
-    passwordHash: { type: String, required: true },
-
-    isVerified: { type: Boolean, default: false },
-    otpHash: { type: String, default: null },
-    otpExpiresAt: { type: Date, default: null }
+const userSchema = new mongoose.Schema({
+  name: String,
+  email: { type: String, unique: true, index: true, required: true },
+  phone: String,
+  passwordHash: String, // hashed password (bcrypt)
+  isVerified: { type: Boolean, default: false },
+  otp: {
+    code: String,
+    expiresAt: Date
   },
-  { timestamps: true }
-);
+  createdAt: { type: Date, default: Date.now }
+});
 
-const User = mongoose.model('User', userSchema);
-export default User;
+export default mongoose.model('User', userSchema);

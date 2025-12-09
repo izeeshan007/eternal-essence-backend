@@ -1,13 +1,11 @@
 // routes/authRoutes.js
 import express from 'express';
-import { register, verifyOtp, login, getMe } from '../controllers/authController.js';
-import { authMiddleware } from '../middleware/auth.js';
+import { registerHandler, verifyOtpHandler, loginHandler } from '../controllers/authController.js';
 
 const router = express.Router();
 
-router.post('/register', register);
-router.post('/verify-otp', verifyOtp);
-router.post('/login', login);
-router.get('/me', authMiddleware, getMe);
+router.post('/register', registerHandler);
+router.post('/verify-otp', verifyOtpHandler);
+router.post('/login', loginHandler);
 
 export default router;
