@@ -1,19 +1,15 @@
 // models/Otp.js
 import mongoose from 'mongoose';
 
-const otpSchema = new mongoose.Schema(
-  {
-    email: { type: String, required: true, lowercase: true },
-    otp: { type: String, required: true }, // 6-digit string
-    name: { type: String },
-    phone: { type: String },
-    passwordHash: { type: String }, // hashed password from signup
-    expiresAt: { type: Date, required: true },
-    used: { type: Boolean, default: false }
-  },
-  { timestamps: true }
-);
+const otpSchema = new mongoose.Schema({
+  email: { type: String, required: true, index: true },
+  code: { type: String, required: true },
+  purpose: { type: String, default: 'signup' }, // signup | guest | reset
+  attempts: { type: Number, default: 0 },
+  createdAt: { type: Date, default: Date.now, index: true },
+  expiresAt: { type: Date, required: true, index: true }
+});
 
-otpSchema.index({ email: 1 });
+otpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
-export const Otp = mongoose.model('Otp', otpSchema);
+export default mongoose.models.Otp || mongoose.model('Otp', otpSchema);

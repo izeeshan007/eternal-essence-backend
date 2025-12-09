@@ -1,36 +1,36 @@
 // utils/mailer.js
 import nodemailer from 'nodemailer';
 
-const SMTP_HOST = process.env.SMTP_HOST;
-const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
-const SMTP_USER = process.env.SMTP_USER;
-const SMTP_PASS = process.env.SMTP_PASS;
-const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
-
-let transporter = null;
-
-if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
-  transporter = nodemailer.createTransport({
+const getTransporter = () => {
+  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM } = process.env;
+  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) {
+    console.warn('⚠️ SMTP not configured - email sending disabled.');
+    return null;
+  }
+  return nodemailer.createTransport({
     host: SMTP_HOST,
-    port: SMTP_PORT,
-    secure: SMTP_PORT === 465, // true for 465, false for 587
-    auth: {
-      user: SMTP_USER,
-      pass: SMTP_PASS
-    }
+    port: Number(SMTP_PORT || 587),
+    secure: Number(SMTP_PORT) === 465,
+    auth: { user: SMTP_USER, pass: SMTP_PASS }
   });
-} else {
-  console.warn('⚠️ SMTP not configured - email sending disabled.');
-}
+};
 
-export async function sendMail({ to, subject, text, html }) {
+export async function sendOtpEmail({ to, code, purpose = 'signup' }) {
+  const transporter = getTransporter();
   if (!transporter) throw new Error('SMTP not configured');
-  const info = await transporter.sendMail({
-    from: SMTP_FROM,
-    to,
-    subject,
-    text: text || '',
-    html: html || text || ''
-  });
-  return info;
+
+  const from = process.env.SMTP_FROM || process.env.SMTP_USER;
+  const subject = purpose === 'guest' ? 'Your guest OTP — Eternal Essence' : (purpose === 'reset' ? 'Password reset OTP — Eternal Essence' : 'Your OTP — Eternal Essence');
+  const text = `Your ${purpose} OTP is: ${code}. It will expire in 10 minutes.`;
+
+  const html = `
+    <div style="font-family: sans-serif; color:#111;">
+      <h3 style="color:#111">Eternal Essence</h3>
+      <p>Your ${purpose} OTP is:</p>
+      <h2 style="letter-spacing:6px">${code}</h2>
+      <p style="color:#777; font-size:13px">This OTP will expire in 10 minutes.</p>
+    </div>
+  `;
+
+  return transporter.sendMail({ from, to, subject, text, html });
 }
