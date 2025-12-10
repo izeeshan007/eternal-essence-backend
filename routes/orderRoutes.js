@@ -6,7 +6,10 @@ import {
   createCODOrder,
   getMyOrders
 } from '../controllers/orderController.js';
-import { authMiddleware } from '../middleware/auth.js';
+// routes/orderRoutes.js
+import authMiddleware from '../middleware/auth.js';
+
+
 
 const router = express.Router();
 
