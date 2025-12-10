@@ -1,6 +1,7 @@
 // middleware/auth.js
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
+import authMiddleware from '../middleware/authMiddleware.js'
 
 export async function requireAuth(req, res, next) {
   const header = req.headers.authorization || '';
