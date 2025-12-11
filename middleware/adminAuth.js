@@ -1,24 +1,49 @@
-// middleware/adminAuth.js (ESM)
+// middleware/adminAuth.js
 import jwt from 'jsonwebtoken';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'change_this_secret';
+const JWT_SECRET = process.env.JWT_SECRET || 'changeme';
 
-export default function adminAuth(req, res, next) {
+/**
+ * requireAdmin(req, res, next)
+ * - Verifies a Bearer JWT and ensures admin privileges.
+ * - Accepts tokens that carry { isAdmin: true } or tokens issued for an ADMIN_EMAIL
+ */
+export function requireAdmin(req, res, next) {
   try {
-    const auth = req.headers.authorization || req.headers.Authorization;
+    const auth = req.headers.authorization || req.headers.Authorization || '';
     if (!auth || !auth.toString().startsWith('Bearer ')) {
       return res.status(401).json({ success: false, error: 'Missing auth token' });
     }
+
     const token = auth.split(' ')[1];
-    const payload = jwt.verify(token, JWT_SECRET);
-    if (!payload || !payload.isAdmin) {
-      return res.status(403).json({ success: false, error: 'Not an admin' });
+    let payload;
+    try {
+      payload = jwt.verify(token, JWT_SECRET);
+    } catch (err) {
+      console.warn('requireAdmin: token verify failed', err?.message || err);
+      return res.status(401).json({ success: false, error: 'Invalid or expired token' });
     }
-    // attach admin info
-    req.admin = payload;
-    next();
+
+    // Allow if token says isAdmin
+    if (payload && payload.isAdmin) {
+      req.admin = payload;
+      return next();
+    }
+
+    // As a fallback if ADMIN_EMAIL is configured and token email matches, accept it
+    const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+    if (ADMIN_EMAIL && payload && payload.email && payload.email.toLowerCase() === ADMIN_EMAIL) {
+      req.admin = payload;
+      return next();
+    }
+
+    // Optionally if you use user documents with an isAdmin flag you could check DB here.
+    return res.status(403).json({ success: false, error: 'Not an admin' });
   } catch (err) {
-    console.error('adminAuth error', err?.message || err);
-    return res.status(401).json({ success: false, error: 'Invalid or expired token' });
+    console.error('requireAdmin unexpected error', err?.message || err);
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
   }
 }
+
+// also export default for compatibility with default imports
+export default requireAdmin;

@@ -7,9 +7,10 @@ const otpSchema = new mongoose.Schema({
   purpose: { type: String, default: 'signup' }, // signup | guest | reset
   attempts: { type: Number, default: 0 },
   createdAt: { type: Date, default: Date.now, index: true },
-  expiresAt: { type: Date, required: true, index: true }
+  expiresAt: { type: Date, required: true } // remove index:true here to avoid duplication
 });
 
+// ttl index — remove duplicates elsewhere if present
 otpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 export default mongoose.models.Otp || mongoose.model('Otp', otpSchema);

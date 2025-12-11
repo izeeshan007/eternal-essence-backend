@@ -1,5 +1,14 @@
 // server.js (updated)
 import './config/env.js'; // must be first to load dotenv and normalize env
+
+// server.js (place after import './config/env.js')
+console.log('--- ADMIN ENV ---');
+console.log('ADMIN_EMAIL:', (process.env.ADMIN_EMAIL||'').trim().toLowerCase());
+console.log('ADMIN_PASSWORD set?', !!process.env.ADMIN_PASSWORD);
+console.log('JWT_SECRET set?', !!process.env.JWT_SECRET);
+console.log('-----------------');
+
+
 import express from 'express';
 import cors from 'cors';
 import { ENV, isSmtpConfigured, isJwtConfigured } from './config/env.js';
