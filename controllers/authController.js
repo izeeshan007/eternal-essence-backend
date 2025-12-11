@@ -7,6 +7,7 @@ import Otp from '../models/Otp.js';
 import { sendOtpEmail } from '../utils/mailer.js'; // keep your existing mailer
 import { ENV } from '../config/env.js';
 
+
 const OTP_TTL_MINUTES = 10;
 const RESET_TOKEN_TTL_MINUTES = 15;
 const JWT_SECRET = process.env.JWT_SECRET || ENV.JWT_SECRET || 'devsecret';
@@ -26,27 +27,24 @@ export async function sendOtpHandler(req, res) {
     const { email, phone, purpose = 'signup', name } = req.body;
     if (!email) return res.status(400).json({ success: false, error: 'Email is required.' });
 
-    const normalized = email.toLowerCase().trim();
     const code = generateOtpCode();
     const now = new Date();
     const expiresAt = new Date(now.getTime() + OTP_TTL_MINUTES * 60 * 1000);
 
     await Otp.findOneAndUpdate(
-      { email: normalized, purpose },
+      { email: email.toLowerCase(), purpose },
       { code, createdAt: now, expiresAt, attempts: 0 },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-    // attempt to send email using existing mailer helper shape
+    // Attempt to send — capture any transport error and return it for diagnostics
     try {
-      // keep existing signature (your code base calls sendOtpEmail({ to, code, purpose }) in many places)
-      await sendOtpEmail({ to: normalized, code, purpose, name });
-    } catch (mailErr) {
-      console.warn('sendOtp email failed:', mailErr && mailErr.message);
-      // continue, OTP record exists regardless — caller can retry
+      const info = await sendOtpEmail({ to: email, code, purpose, name });
+      return res.json({ success: true, message: `OTP sent to ${email}`, info: { messageId: info.messageId } });
+    } catch (err) {
+      console.error('sendOtpHandler: smtp send failed', err && err.message ? err.message : err);
+      return res.status(500).json({ success: false, error: 'Could not send OTP (SMTP error). Check server logs.' });
     }
-
-    return res.json({ success: true, message: `OTP sent to ${normalized}` });
   } catch (err) {
     console.error('sendOtpHandler error', err);
     return res.status(500).json({ success: false, error: 'Server error while sending OTP email.' });

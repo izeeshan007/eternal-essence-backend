@@ -1,12 +1,10 @@
 // server.js (updated)
 import './config/env.js'; // must be first to load dotenv and normalize env
 
-// server.js (place after import './config/env.js')
-console.log('--- ADMIN ENV ---');
-console.log('ADMIN_EMAIL:', (process.env.ADMIN_EMAIL||'').trim().toLowerCase());
-console.log('ADMIN_PASSWORD set?', !!process.env.ADMIN_PASSWORD);
-console.log('JWT_SECRET set?', !!process.env.JWT_SECRET);
-console.log('-----------------');
+
+
+
+
 
 
 import express from 'express';
@@ -20,6 +18,10 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const app = express();
 const PORT = ENV.PORT || 5000;
+
+
+
+
 
 // ================= try to load admin routes (support ESM or CommonJS) =================
 let adminRoutes = null;
@@ -159,3 +161,15 @@ app.use('/api/orders', orderRoutes);
     process.exit(1);
   }
 })();
+
+
+app.get('/api/test-email', async (req, res) => {
+  try {
+    const to = process.env.SMTP_USER; // send to yourself as test
+    const info = await import('./utils/mailer.js').then(m => m.sendTestEmail(to));
+    return res.json({ success: true, message: 'Test email sent', info: { messageId: info.messageId } });
+  } catch (err) {
+    console.error('/api/test-email error', err && err.message ? err.message : err);
+    return res.status(500).json({ success: false, error: err.message || 'Test email failed' });
+  }
+});
