@@ -1,92 +1,120 @@
-// controllers/authController.js
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import Otp from '../models/Otp.js';
-import { sendOtpEmail } from '../utils/mailer.js'; // keep your existing mailer
+// replace the bad import with this:
+import { sendOtpEmail, sendMail as sendTransactionalEmail, sendTestEmail } from '../utils/mailer.js';
 import { ENV } from '../config/env.js';
-
 
 const OTP_TTL_MINUTES = 10;
 const RESET_TOKEN_TTL_MINUTES = 15;
 const JWT_SECRET = process.env.JWT_SECRET || ENV.JWT_SECRET || 'devsecret';
 
-/* helpers */
+/* ---------- helpers ---------- */
 function generateOtpCode() {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  return String(Math.floor(100000 + Math.random() * 900000));
 }
 
 function signJwt(payload, expiresIn = '30d') {
   return jwt.sign(payload, JWT_SECRET, { expiresIn });
 }
 
-/* ========== SEND OTP (generic) ========== */
+async function upsertOtp(email, purpose, code = null) {
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + OTP_TTL_MINUTES * 60 * 1000);
+  const otp = code || generateOtpCode();
+  await Otp.findOneAndUpdate(
+    { email: email.toLowerCase(), purpose },
+    { code: otp, createdAt: now, expiresAt, attempts: 0 },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+  return otp;
+}
+
+/* ========== SEND OTP (generic: signup, guest, reset) ========== */
 export async function sendOtpHandler(req, res) {
   try {
-    const { email, phone, purpose = 'signup', name } = req.body;
+    const { email, phone, purpose = 'signup', name } = req.body || {};
     if (!email) return res.status(400).json({ success: false, error: 'Email is required.' });
 
-    const code = generateOtpCode();
-    const now = new Date();
-    const expiresAt = new Date(now.getTime() + OTP_TTL_MINUTES * 60 * 1000);
+    const normalized = email.toLowerCase().trim();
+    const code = await upsertOtp(normalized, purpose);
 
-    await Otp.findOneAndUpdate(
-      { email: email.toLowerCase(), purpose },
-      { code, createdAt: now, expiresAt, attempts: 0 },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
-
-    // Attempt to send — capture any transport error and return it for diagnostics
+    // Prefer specialised helper (sendOtpEmail) which builds message for OTPs
     try {
-      const info = await sendOtpEmail({ to: email, code, purpose, name });
-      return res.json({ success: true, message: `OTP sent to ${email}`, info: { messageId: info.messageId } });
+      const info = await sendOtpEmail({ to: normalized, code, purpose, name, phone });
+      return res.json({ success: true, message: `OTP sent to ${normalized}`, info: info?.messageId ? { messageId: info.messageId } : {} });
     } catch (err) {
-      console.error('sendOtpHandler: smtp send failed', err && err.message ? err.message : err);
-      return res.status(500).json({ success: false, error: 'Could not send OTP (SMTP error). Check server logs.' });
+      console.error('sendOtpHandler: mail send failed', err && err.message ? err.message : err);
+      return res.status(500).json({ success: false, error: 'Failed to send OTP email (SMTP error).' });
     }
   } catch (err) {
     console.error('sendOtpHandler error', err);
-    return res.status(500).json({ success: false, error: 'Server error while sending OTP email.' });
+    return res.status(500).json({ success: false, error: 'Server error while sending OTP.' });
   }
 }
 
-/* ========== VERIFY OTP ========== */
+/* ========== SEND RESET OTP ========== */
+export async function sendResetOtpHandler(req, res) {
+  try {
+    const { email } = req.body || {};
+    if (!email) return res.status(400).json({ success: false, error: 'Email is required.' });
+
+    const normalized = email.toLowerCase().trim();
+    const user = await User.findOne({ email: normalized });
+    if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+
+    const code = await upsertOtp(normalized, 'reset');
+
+    try {
+      const info = await sendOtpEmail({ to: normalized, code, purpose: 'reset', name: user.name });
+      return res.json({ success: true, message: `Reset OTP sent to ${normalized}`, info: info?.messageId ? { messageId: info.messageId } : {} });
+    } catch (err) {
+      console.error('sendResetOtpHandler: mail send failed', err && err.message ? err.message : err);
+      return res.status(500).json({ success: false, error: 'Failed to send reset OTP (SMTP error).' });
+    }
+  } catch (err) {
+    console.error('sendResetOtpHandler error', err);
+    return res.status(500).json({ success: false, error: 'Server error while sending reset OTP.' });
+  }
+}
+
+/* ========== VERIFY OTP (signup / guest / reset) ========== */
 export async function verifyOtpHandler(req, res) {
   try {
-    const { email, otp, purpose = 'signup', name } = req.body;
+    const { email, otp, purpose = 'signup', name } = req.body || {};
     if (!email || !otp) return res.status(400).json({ success: false, error: 'Email and OTP are required.' });
 
     const normalized = email.toLowerCase().trim();
     const record = await Otp.findOne({ email: normalized, purpose });
-    if (!record) return res.status(400).json({ success: false, error: 'OTP not generated' });
+    if (!record) return res.status(400).json({ success: false, error: 'OTP not generated.' });
 
     if (new Date() > new Date(record.expiresAt)) {
       await Otp.deleteOne({ _id: record._id }).catch(()=>{});
-      return res.status(400).json({ success: false, error: 'OTP expired' });
+      return res.status(400).json({ success: false, error: 'OTP expired.' });
     }
 
-    if (record.code !== otp) {
-      await Otp.updateOne({ _id: record._id }, { $inc: { attempts: 1 } });
-      return res.status(400).json({ success: false, error: 'Invalid OTP' });
+    if (String(record.code) !== String(otp).trim()) {
+      await Otp.updateOne({ _id: record._id }, { $inc: { attempts: 1 } }).catch(()=>{});
+      return res.status(400).json({ success: false, error: 'Invalid OTP.' });
     }
 
-    // valid OTP -> remove it
-    await Otp.deleteOne({ _id: record._id });
+    // valid -> remove otp
+    await Otp.deleteOne({ _id: record._id }).catch(()=>{});
 
-    /* Handle purposes */
     if (purpose === 'signup') {
       let user = await User.findOne({ email: normalized });
       if (!user) {
         user = new User({ email: normalized, name: name || '', isVerified: true });
         await user.save();
       } else {
-        // mark verified and keep other fields intact
         user.isVerified = true;
+        if (!user.name && name) user.name = name;
         await user.save();
       }
       const token = signJwt({ id: user._id, email: user.email }, '30d');
-      return res.json({ success: true, message: 'OTP verified', token, user: { email: user.email, id: user._id, name: user.name } });
+      return res.json({ success: true, message: 'OTP verified', token, user: { id: user._id, email: user.email, name: user.name } });
     }
 
     if (purpose === 'guest') {
@@ -95,8 +123,8 @@ export async function verifyOtpHandler(req, res) {
         user = new User({ email: normalized, name: name || 'Guest', isVerified: true });
         await user.save();
       }
-      const token = signJwt({ id: user._id, email: user.email, guest: true }, '7d');
-      return res.json({ success: true, message: 'Guest verified', token, user: { email: user.email, id: user._id } });
+      const token = signJwt({ id: user._1d, email: user.email, guest: true }, '7d');
+      return res.json({ success: true, message: 'Guest verified', token, user: { id: user._id, email: user.email } });
     }
 
     if (purpose === 'reset') {
@@ -107,73 +135,33 @@ export async function verifyOtpHandler(req, res) {
       return res.json({ success: true, message: 'OTP verified for reset', resetToken });
     }
 
-    // default
-    return res.json({ success: true, message: 'OTP verified' });
+    // fallback success
+    return res.json({ success: true, message: 'OTP verified.' });
   } catch (err) {
     console.error('verifyOtpHandler error', err);
     return res.status(500).json({ success: false, error: 'Server error during OTP verification.' });
   }
 }
 
-
-
-/**
- * POST /api/auth/verify-reset-otp
- * body: { email, otp }
- * Verifies an OTP with purpose='reset' and returns a short-lived resetToken JWT
- */
+/* ========== VERIFY RESET OTP (explicit endpoint) ========== */
 export async function verifyResetOtpHandler(req, res) {
+  // small wrapper keeping same behavior as verifyOtp with purpose='reset'
   try {
     const { email, otp } = req.body || {};
     if (!email || !otp) return res.status(400).json({ success: false, error: 'Email and OTP are required.' });
-
-    const record = await Otp.findOne({ email: email.toLowerCase(), purpose: 'reset' });
-    if (!record) {
-      console.log(`verifyResetOtp: no OTP record for ${email}`);
-      return res.status(400).json({ success: false, error: 'OTP not generated.' });
-    }
-
-    if (new Date() > new Date(record.expiresAt)) {
-      console.log(`verifyResetOtp: otp expired for ${email}`);
-      return res.status(400).json({ success: false, error: 'OTP expired.' });
-    }
-
-    if (record.code !== String(otp).trim()) {
-      await Otp.updateOne({ _id: record._id }, { $inc: { attempts: 1 } });
-      return res.status(400).json({ success: false, error: 'Invalid OTP.' });
-    }
-
-    // valid OTP -> delete record and issue short-lived reset JWT
-    await Otp.deleteOne({ _id: record._id });
-
-    const user = await User.findOne({ email: email.toLowerCase() });
-    if (!user) return res.status(404).json({ success: false, error: 'No account found for this email.' });
-
-    const resetToken = jwt.sign(
-      { id: user._id, email: user.email, reset: true },
-      process.env.JWT_SECRET || 'devsecret',
-      { expiresIn: '15m' } // keep this consistent with RESET_TOKEN_TTL_MINUTES if defined
-    );
-
-    return res.json({ success: true, message: 'OTP verified for reset', resetToken });
+    // reuse logic
+    return await verifyOtpHandler({ body: { email, otp, purpose: 'reset' } }, res);
   } catch (err) {
     console.error('verifyResetOtpHandler error', err);
-    return res.status(500).json({ success: false, error: 'Server error during OTP verification.' });
+    return res.status(500).json({ success: false, error: 'Server error.' });
   }
 }
 
-
-/* ========== REGISTER ========== */
-/**
- * registerHandler:
- * - If user exists & isVerified => 409
- * - If user exists & !isVerified => update passwordHash and resend OTP instead of blocking
- * - If new user => create user with isVerified=false, save passwordHash, create OTP and send
- */
+/* ========== REGISTER (with handling existing unverified user) ========== */
 export async function registerHandler(req, res) {
   try {
     const { name, email, phone, password } = req.body || {};
-    if (!email || !password) return res.status(400).json({ success: false, error: 'Email and password required' });
+    if (!email || !password) return res.status(400).json({ success: false, error: 'Email and password required.' });
 
     const normalized = email.toLowerCase().trim();
     const existing = await User.findOne({ email: normalized });
@@ -183,50 +171,37 @@ export async function registerHandler(req, res) {
 
     if (existing) {
       if (existing.isVerified) {
-        return res.status(409).json({ success: false, error: 'User already exists' });
+        return res.status(409).json({ success: false, error: 'User already exists.' });
       } else {
-        // existing but not verified -> update their passwordHash + name/phone and (re)send OTP
+        // update unverified account's password + name/phone and resend OTP
         existing.passwordHash = passwordHash;
         if (typeof name === 'string' && name) existing.name = name;
         if (typeof phone === 'string' && phone) existing.phone = phone;
         await existing.save();
 
-        // create OTP record
-        const code = generateOtpCode();
-        const now = new Date();
-        const expiresAt = new Date(now.getTime() + OTP_TTL_MINUTES * 60 * 1000);
-        await Otp.findOneAndUpdate(
-          { email: normalized, purpose: 'signup' },
-          { code, createdAt: now, expiresAt, attempts: 0 },
-          { upsert: true, new: true, setDefaultsOnInsert: true }
-        );
-        try { await sendOtpEmail({ to: normalized, code, purpose: 'signup', name }); } catch (e){ console.warn('resend signup OTP mail failed', e?.message || e); }
+        const code = await upsertOtp(normalized, 'signup');
+
+        try { await sendOtpEmail({ to: normalized, code, purpose: 'signup', name }); }
+        catch (e) { console.warn('resend signup OTP mail failed', e && e.message ? e.message : e); }
+
         return res.json({ success: true, message: 'Existing unverified account updated. OTP resent to email.' });
       }
     }
 
-    // create a new user record (unverified)
+    // create new unverified user
     const user = new User({ name, email: normalized, phone, passwordHash, isVerified: false });
     await user.save();
 
-    const code = generateOtpCode();
-    const now = new Date();
-    const expiresAt = new Date(now.getTime() + OTP_TTL_MINUTES * 60 * 1000);
+    const code = await upsertOtp(normalized, 'signup');
 
-    await Otp.findOneAndUpdate(
-      { email: normalized, purpose: 'signup' },
-      { code, createdAt: now, expiresAt, attempts: 0 },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
-
-    try { await sendOtpEmail({ to: normalized, code, purpose: 'signup', name }); } catch (e){ console.warn('signup OTP mail failed', e?.message || e); }
+    try { await sendOtpEmail({ to: normalized, code, purpose: 'signup', name }); }
+    catch (e) { console.warn('signup OTP mail failed', e && e.message ? e.message : e); }
 
     return res.json({ success: true, message: 'OTP sent to your email. Please verify to complete registration.' });
   } catch (err) {
     console.error('registerHandler error', err);
-    // handle duplicate key gracefully
     if (String(err).includes('E11000') || String(err).includes('duplicate')) {
-      return res.status(409).json({ success: false, error: 'User already exists' });
+      return res.status(409).json({ success: false, error: 'User already exists.' });
     }
     return res.status(500).json({ success: false, error: 'Server error during registration.' });
   }
@@ -239,13 +214,14 @@ export async function loginHandler(req, res) {
     if (!email || !password) return res.status(400).json({ success: false, error: 'Email and password are required.' });
 
     const normalized = email.toLowerCase().trim();
-    const user = await User.findOne({ email: normalized });
+    const user = await User.findOne({ email: normalized }).select('+passwordHash');
+
     if (!user) return res.status(400).json({ success: false, error: 'Invalid credentials.' });
 
     const ok = await bcrypt.compare(password, user.passwordHash || '');
     if (!ok) return res.status(400).json({ success: false, error: 'Invalid credentials.' });
 
-    // normalize isVerified (avoid undefined)
+    // normalize isVerified to boolean to avoid undefined behavior
     const verified = !!user.isVerified;
     if (!verified) return res.status(403).json({ success: false, error: 'Account not verified. Please verify using OTP.' });
 
@@ -257,8 +233,6 @@ export async function loginHandler(req, res) {
   }
 }
 
-
-
 /* ========== FORGOT PASSWORD (send OTP) ========== */
 export async function forgotPasswordHandler(req, res) {
   try {
@@ -269,17 +243,10 @@ export async function forgotPasswordHandler(req, res) {
     const user = await User.findOne({ email: normalized });
     if (!user) return res.status(404).json({ success: false, error: 'No account found for this email.' });
 
-    const code = generateOtpCode();
-    const now = new Date();
-    const expiresAt = new Date(now.getTime() + OTP_TTL_MINUTES * 60 * 1000);
+    const code = await upsertOtp(normalized, 'reset');
 
-    await Otp.findOneAndUpdate(
-      { email: normalized, purpose: 'reset' },
-      { code, createdAt: now, expiresAt, attempts: 0 },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
-
-    try { await sendOtpEmail({ to: normalized, code, purpose: 'reset', name: user.name }); } catch (e){ console.warn('forgot pwd mail failed', e?.message || e); }
+    try { await sendOtpEmail({ to: normalized, code, purpose: 'reset', name: user.name }); }
+    catch (e) { console.warn('forgot pwd mail failed', e && e.message ? e.message : e); }
 
     return res.json({ success: true, message: `OTP sent to ${normalized}` });
   } catch (err) {
@@ -304,7 +271,7 @@ export async function resetPasswordHandler(req, res) {
     }
 
     const normalized = email.toLowerCase().trim();
-    const user = await User.findOne({ email: normalized });
+    const user = await User.findOne({ email: normalized }).select('+passwordHash');
     if (!user) return res.status(404).json({ success: false, error: 'User not found.' });
 
     const salt = await bcrypt.genSalt(10);
@@ -322,9 +289,8 @@ export async function resetPasswordHandler(req, res) {
 /* ========== PROFILE & HELPERS ========== */
 export async function getProfileHandler(req, res) {
   try {
-    // token comes from Authorization header or middleware decoding
     const authHeader = req.headers.authorization || '';
-    const token = authHeader.replace('Bearer ', '').trim();
+    const token = authHeader.replace(/^Bearer\s*/i, '').trim();
     if (!token) return res.status(401).json({ success: false, error: 'Missing token.' });
 
     let payload;
@@ -343,13 +309,13 @@ export async function getProfileHandler(req, res) {
 export async function updateProfileHandler(req, res) {
   try {
     const authHeader = req.headers.authorization || '';
-    const token = authHeader.replace('Bearer ', '').trim();
+    const token = authHeader.replace(/^Bearer\s*/i, '').trim();
     if (!token) return res.status(401).json({ success: false, error: 'Missing token.' });
 
     let payload;
     try { payload = jwt.verify(token, JWT_SECRET); } catch (e) { return res.status(401).json({ success: false, error: 'Invalid token.' }); }
 
-    const { name, phone, address } = req.body;
+    const { name, phone, address } = req.body || {};
     const user = await User.findById(payload.id);
     if (!user) return res.status(404).json({ success: false, error: 'User not found.' });
 
@@ -374,11 +340,7 @@ export async function updateProfileHandler(req, res) {
   }
 }
 
-
-/* ================= WISHLIST HANDLERS ================= */
-// Assumes User model is already imported earlier in this file
-// and JWT_SECRET / signJwt helpers are present.
-
+/* ========== WISHLIST HANDLERS ========== */
 function extractUserIdFromAuthHeader(req) {
   const authHeader = req.headers.authorization || req.headers.Authorization || '';
   const token = String(authHeader).replace(/^Bearer\s*/i, '').trim();
@@ -391,13 +353,8 @@ function extractUserIdFromAuthHeader(req) {
   }
 }
 
-/**
- * GET /api/auth/wishlist
- * Returns array of wishlist product ids for the authenticated user
- */
 export async function getWishlistHandler(req, res) {
   try {
-    // prefer middleware decoded id if you have one (req.user / req.admin), else extract from header
     const userId = (req.user && req.user.id) || extractUserIdFromAuthHeader(req);
     if (!userId) return res.status(401).json({ success: false, error: 'Unauthorized' });
 
@@ -411,11 +368,6 @@ export async function getWishlistHandler(req, res) {
   }
 }
 
-/**
- * POST /api/auth/wishlist
- * body: { productId: number }
- * Adds productId to user's wishlist (if not present)
- */
 export async function addToWishlistHandler(req, res) {
   try {
     const userId = (req.user && req.user.id) || extractUserIdFromAuthHeader(req);
@@ -427,7 +379,6 @@ export async function addToWishlistHandler(req, res) {
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
-    // keep wishlist unique and as numbers
     const pid = Number(productId);
     user.wishlist = Array.isArray(user.wishlist) ? user.wishlist.map(Number) : [];
     if (!user.wishlist.includes(pid)) user.wishlist.push(pid);
@@ -440,10 +391,6 @@ export async function addToWishlistHandler(req, res) {
   }
 }
 
-/**
- * DELETE /api/auth/wishlist/:productId
- * Removes productId from wishlist
- */
 export async function removeFromWishlistHandler(req, res) {
   try {
     const userId = (req.user && req.user.id) || extractUserIdFromAuthHeader(req);
@@ -462,5 +409,18 @@ export async function removeFromWishlistHandler(req, res) {
   } catch (err) {
     console.error('removeFromWishlistHandler error', err);
     return res.status(500).json({ success: false, error: 'Server error' });
+  }
+}
+
+/* ========== Test helpers (optional) ========== */
+export async function sendTestEmailHandler(req, res) {
+  try {
+    const to = req.query.to || process.env.SMTP_USER || process.env.BREVO_SMTP_USER;
+    if (!to) return res.status(400).json({ success: false, error: 'Missing recipient' });
+    const info = await sendTestEmail(to);
+    return res.json({ success: true, info: info?.messageId ? { messageId: info.messageId } : {} });
+  } catch (err) {
+    console.error('sendTestEmailHandler error', err);
+    return res.status(500).json({ success: false, error: 'Could not send test email' });
   }
 }
