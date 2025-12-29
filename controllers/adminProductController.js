@@ -3,13 +3,29 @@ import Product from '../models/Product.js';
 /* CREATE */
 export async function createProduct(req, res) {
   try {
+    const { name, category, price } = req.body;
+
+    if (!name || !category || !price) {
+      return res.status(400).json({
+        success: false,
+        error: 'Name, category and price are required'
+      });
+    }
+
+    if (req.body.description) {
+      req.body.description = req.body.description.trim();
+    }
+
     const product = await Product.create(req.body);
     res.json({ success: true, product });
+
   } catch (err) {
     console.error('createProduct', err);
     res.status(400).json({ success: false, error: err.message });
   }
 }
+
+
 
 /* READ (ADMIN) */
 export async function getAllProductsAdmin(req, res) {
@@ -28,15 +44,21 @@ export async function updateProduct(req, res) {
     const product = await Product.findByIdAndUpdate(
       req.params.id,
       req.body,
-      { new: true }
+      { new: true, runValidators: true } // 👈 important
     );
-    if (!product) return res.status(404).json({ success: false, error: 'Not found' });
+
+    if (!product) {
+      return res.status(404).json({ success: false, error: 'Not found' });
+    }
+
     res.json({ success: true, product });
+
   } catch (err) {
     console.error('updateProduct', err);
     res.status(400).json({ success: false, error: err.message });
   }
 }
+
 
 /* DELETE */
 export async function deleteProduct(req, res) {

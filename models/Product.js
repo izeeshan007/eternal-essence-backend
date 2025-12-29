@@ -3,6 +3,12 @@ import mongoose from 'mongoose';
 const productSchema = new mongoose.Schema({
   name: { type: String, required: true },
 
+  description: {
+  type: String,
+  trim: true,
+  default: ''
+},
+
   category: {
     type: String,
     enum: ['Perfume', 'Attar', 'Solid Perfume', 'Combo'],
@@ -16,12 +22,10 @@ const productSchema = new mongoose.Schema({
   },
 
   inspiredBy: String,
-
   family: String,
+  season: String,
 
-  season: String, // ✅ ADD THIS
-
-  time: {           // ✅ ADD THIS
+  time: {
     type: String,
     enum: ['Day', 'Night', 'Day/Night']
   },
@@ -36,18 +40,18 @@ const productSchema = new mongoose.Schema({
 
   price: { type: Number, required: true },
 
-sizes: [
-  {
-    value: Number,
-    unit: { type: String, enum: ['ml', 'gm'] },
-    priceMultiplier: Number
-  }
-],
-
+  sizes: [
+    {
+      value: Number,
+      unit: { type: String, enum: ['ml', 'gm'] },
+      priceMultiplier: Number
+    }
+  ],
 
   images: [String],
 
   isActive: { type: Boolean, default: true }
+
 }, { timestamps: true });
 
 export default mongoose.model('Product', productSchema);
