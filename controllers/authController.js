@@ -1,3 +1,4 @@
+// controllers/authController.js
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -104,18 +105,33 @@ export async function verifyOtpHandler(req, res) {
     await Otp.deleteOne({ _id: record._id }).catch(()=>{});
 
     if (purpose === 'signup') {
-      let user = await User.findOne({ email: normalized });
-      if (!user) {
-        user = new User({ email: normalized, name: name || '', isVerified: true });
-        await user.save();
-      } else {
-        user.isVerified = true;
-        if (!user.name && name) user.name = name;
-        await user.save();
-      }
-      const token = signJwt({ id: user._id, email: user.email }, '30d');
-      return res.json({ success: true, message: 'OTP verified', token, user: { id: user._id, email: user.email, name: user.name } });
-    }
+  let user = await User.findOne({ email: normalized });
+
+  if (!user) {
+    user = new User({ email: normalized, name: name || '', isVerified: true });
+  }
+
+  user.isVerified = true;
+
+  // ✅ SET PASSWORD IF PROVIDED (guest → full user)
+  if (req.body.password && !user.passwordHash) {
+    const salt = await bcrypt.genSalt(10);
+    user.passwordHash = await bcrypt.hash(req.body.password, salt);
+  }
+
+  if (!user.name && name) user.name = name;
+
+  await user.save();
+
+  const token = signJwt({ id: user._id, email: user.email }, '30d');
+  return res.json({
+    success: true,
+    message: 'OTP verified',
+    token,
+    user: { id: user._id, email: user.email, name: user.name }
+  });
+}
+
 
     if (purpose === 'guest') {
       let user = await User.findOne({ email: normalized });
@@ -170,23 +186,30 @@ export async function registerHandler(req, res) {
     const passwordHash = await bcrypt.hash(password, salt);
 
     if (existing) {
-      if (existing.isVerified) {
-        return res.status(409).json({ success: false, error: 'User already exists.' });
-      } else {
-        // update unverified account's password + name/phone and resend OTP
-        existing.passwordHash = passwordHash;
-        if (typeof name === 'string' && name) existing.name = name;
-        if (typeof phone === 'string' && phone) existing.phone = phone;
-        await existing.save();
+  // ✅ Case 1: Guest user exists (no password yet)
+  if (!existing.passwordHash) {
+    const salt = await bcrypt.genSalt(10);
+    existing.passwordHash = await bcrypt.hash(password, salt);
+    if (name) existing.name = name;
+    if (phone) existing.phone = phone;
+    existing.isVerified = false;
+    await existing.save();
 
-        const code = await upsertOtp(normalized, 'signup');
+    const code = await upsertOtp(normalized, 'signup');
+    await sendOtpEmail({ to: normalized, code, purpose: 'signup', name });
 
-        try { await sendOtpEmail({ to: normalized, code, purpose: 'signup', name }); }
-        catch (e) { console.warn('resend signup OTP mail failed', e && e.message ? e.message : e); }
+    return res.json({
+      success: true,
+      message: 'Guest account found. OTP sent to complete registration.'
+    });
+  }
 
-        return res.json({ success: true, message: 'Existing unverified account updated. OTP resent to email.' });
-      }
-    }
+  // ❌ Case 2: Real user already exists
+  if (existing.isVerified) {
+    return res.status(409).json({ success: false, error: 'User already exists. Please login.' });
+  }
+}
+
 
     // create new unverified user
     const user = new User({ name, email: normalized, phone, passwordHash, isVerified: false });
@@ -218,8 +241,18 @@ export async function loginHandler(req, res) {
 
     if (!user) return res.status(400).json({ success: false, error: 'Invalid credentials.' });
 
-    const ok = await bcrypt.compare(password, user.passwordHash || '');
-    if (!ok) return res.status(400).json({ success: false, error: 'Invalid credentials.' });
+    if (!user.passwordHash) {
+  return res.status(403).json({
+    success: false,
+    error: 'This account was created as guest. Please verify OTP to set password.'
+  });
+}
+
+const ok = await bcrypt.compare(password, user.passwordHash);
+if (!ok) {
+  return res.status(400).json({ success: false, error: 'Invalid credentials.' });
+}
+
 
     // normalize isVerified to boolean to avoid undefined behavior
     const verified = !!user.isVerified;
