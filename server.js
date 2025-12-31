@@ -15,7 +15,7 @@ import orderRoutes from './routes/orderRoutes.js';
 import contactRoutes from './routes/contactRoutes.js';
 import productRoutes from './routes/productRoutes.js';
 import adminRoutes from './routes/admin.js';
-
+import reviewRoutes from './routes/reviewRoutes.js';
 
 // mailer
 import { sendTestEmail } from './utils/mailer.js';
@@ -98,6 +98,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/contact', contactRoutes);
 app.use('/api/products', productRoutes);
+app.use('/api/reviews', reviewRoutes);
 
 /* ================== HEALTH CHECK ================== */
 app.get('/', (req, res) => {
